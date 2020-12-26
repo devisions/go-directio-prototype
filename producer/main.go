@@ -17,7 +17,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Global block, reused for writing.
 var block []byte
+
+// The size of the block used for writing.
+var blocksize int
 
 // Global state of the current file to write into.
 var out *os.File
@@ -39,14 +43,14 @@ func main() {
 		log.Println("Created the (missing) path", cfg.Path)
 	}
 
-	log.Printf("Using blocksize %d and writing files in path %s\n", cfg.BlockSize, cfg.Path)
 	block = directio.AlignedBlock(cfg.BlockSize)
+	blocksize = cfg.BlockSize
+	log.Printf("Using blocksize %d, writing files in path %s\n", cfg.BlockSize, cfg.Path)
 
 	dataCh := make(chan data.SomeData, 1_000_000)
 	defer close(dataCh)
 
-	fileMaxSize := cfg.MaxBlocks * int64(cfg.BlockSize)
-	go writer(cfg.Path, fileMaxSize, dataCh, stopCtx, stopWg)
+	go writer(cfg.Path, cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
 	go producer(dataCh, stopCtx, stopWg)
 
 	waitingForGracefulShutdown(cancelFn, stopWg)
@@ -116,9 +120,9 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 			break
 		default:
 			i++
-			d := data.SomeData{Value: i}
+			d := data.SomeData{Value: internal.RandStringMinMax(1, 101)}
 			dataCh <- d
-			log.Printf("Produced %+v\n", d)
+			log.Printf("Produced (%d chars) %+v\n", len(d.Value), d)
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -127,10 +131,7 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 }
 
 func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
-	err := d.Encode(block)
-	if err != nil {
-		return errors.Wrap(err, "encoding data")
-	}
+
 	f, err := internal.GetFileForWriting(out, filepathPrefix, fileMaxsize)
 	if err != nil {
 		return err
@@ -143,10 +144,22 @@ func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 		log.Println("Writing to new file", f.Name())
 		out = f
 	}
-	_, err = out.Write(block)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("writing to file (the item %+v)", *d))
+	// err := d.Encode(block)
+	ed := d.Encode()
+	edl := (len(ed))
+	log.Println("[dbg] encoded data length:", edl)
+	if blocksize >= edl {
+		// Encoded data's length fits into the block.
+		copy(block, ed)
+		_, err = out.Write(block)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("writing to file (the item %+v)", *d))
+		}
+		return nil
 	}
+	// Encoded data's length must be written using multiple blocks.
+	// TODO
+	log.Fatal("Unimplemented writing encoded data in multiple blocks")
 	return nil
 }
 

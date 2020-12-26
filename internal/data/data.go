@@ -9,10 +9,16 @@ import (
 )
 
 type SomeData struct {
-	Value uint32
+	Value string
 }
 
-func (d *SomeData) Encode(to []byte) error {
+func (d *SomeData) Encode() []byte {
+	buf := bytes.Buffer{}
+	_ = gob.NewEncoder(&buf).Encode(*d)
+	return buf.Bytes()
+}
+
+func (d *SomeData) EncodeTo(to []byte) error {
 	buf := bytes.Buffer{}
 	_ = gob.NewEncoder(&buf).Encode(*d)
 	if len(to) < buf.Len() {
@@ -30,4 +36,20 @@ func Decode(from []byte) (*SomeData, error) {
 		return nil, errors.Wrap(err, "decoding data")
 	}
 	return d, nil
+}
+
+func I64toBytes(val uint64) []byte {
+	r := make([]byte, 8)
+	for i := uint64(0); i < 8; i++ {
+		r[i] = byte((val >> (i * 8)) & 0xff)
+	}
+	return r
+}
+
+func Bytestoi64(val []byte) uint64 {
+	r := uint64(0)
+	for i := uint64(0); i < 8; i++ {
+		r |= uint64(val[i]) << (8 * i)
+	}
+	return r
 }

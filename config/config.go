@@ -10,15 +10,15 @@ import (
 )
 
 const (
-	IO_BLOCK_SIZE = "IO_BLOCK_SIZE"
-	IO_MAX_BLOCKS = "IO_MAX_BLOCKS"
-	IO_PATH       = "IO_PATH"
+	IO_BLOCK_SIZE          = "IO_BLOCK_SIZE"
+	IO_MAX_FILE_SIZE_BYTES = "IO_MAX_FILE_SIZE_BYTES"
+	IO_PATH                = "IO_PATH"
 )
 
 type Config struct {
-	BlockSize int
-	MaxBlocks int64
-	Path      string
+	BlockSize        int
+	MaxFileSizeBytes int64
+	Path             string
 }
 
 // Load is loading the configuration items from .env file.
@@ -39,15 +39,15 @@ func Load() (*Config, error) {
 	}
 	c.BlockSize = n
 
-	val, defined = os.LookupEnv(IO_MAX_BLOCKS)
+	val, defined = os.LookupEnv(IO_MAX_FILE_SIZE_BYTES)
 	if !defined {
-		return nil, errors.New(fmt.Sprint("Could not read", IO_MAX_BLOCKS, "from config file"))
+		return nil, errors.New(fmt.Sprint("Could not read", IO_MAX_FILE_SIZE_BYTES, "from config file"))
 	}
 	n, err = strconv.Atoi(val)
 	if err != nil {
-		return nil, errors.New(fmt.Sprint("Unable to use the", IO_MAX_BLOCKS, "config item value. Reason:", err))
+		return nil, errors.New(fmt.Sprint("Unable to use the", IO_MAX_FILE_SIZE_BYTES, "config item value. Reason:", err))
 	}
-	c.MaxBlocks = int64(n)
+	c.MaxFileSizeBytes = int64(n)
 
 	val, defined = os.LookupEnv(IO_PATH)
 	if !defined {
