@@ -17,21 +17,21 @@ import (
 )
 
 var (
-	// Block, reused for writing.
+	// The block (re)used for writing.
 	block []byte
 
-	// The size of the block used for writing.
+	// Size of the `block`.
 	blocksize int
 
-	// Path where to write the files.
+	// Path where the files are written.
 	filepathPrefix string
 
 	// Maximum size of a file to write into.
 	fileMaxsize int64
-)
 
-// Global state of the current file to write into.
-var out *os.File
+	// The current file to write into.
+	out *os.File
+)
 
 func main() {
 	// Setting up the graceful shutdown elements.
