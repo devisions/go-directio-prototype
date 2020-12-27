@@ -11,10 +11,34 @@ import (
 	"github.com/pkg/errors"
 )
 
-// GetFileForIO looks for the next available file to be used for writing.
-// If existing file reached the max size, it initializes a new file (with a new name and opens it)
-// and returns it. Otherwise, it returns nil (meaning that `curr` file can still be used for writing).
-func GetFileForWriting(curr *os.File, path string, maxsize int64) (*os.File, error) {
+func GetInitialFileForWriting(path string, maxsize int64) (*os.File, error) {
+	file, err := getLatestFileNameForWriting(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return openNewFileForWriting(path)
+		}
+		return nil, errors.Wrap(err, "trying to get new file for writing")
+	}
+	filepath := path + string(os.PathSeparator) + file
+	// Checking the size before returning it.
+	f, err := data.OpenFileForWriting(filepath, true)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, errors.Wrap(err, "trying to get the current file info")
+	}
+	if fi.Size() >= maxsize {
+		return openNewFileForWriting(path)
+	}
+	return f, nil
+}
+
+// CheckNextFileForWriting checks if a next file should be used for writing.
+// If existing file reached the max size, it initializes a new file and returns it.
+// Otherwise, it returns nil, meaning that `curr` file can still be used for writing.
+func CheckNextFileForWriting(curr *os.File, path string, maxsize int64) (*os.File, error) {
 	// First, let's check the current file size, if provided.
 	if curr != nil {
 		fi, err := curr.Stat()
@@ -26,16 +50,7 @@ func GetFileForWriting(curr *os.File, path string, maxsize int64) (*os.File, err
 		}
 		return nil, nil
 	}
-	// This should be in the startup phase.
-	file, err := getLatestFileNameForWriting(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return openNewFileForWriting(path)
-		}
-		return nil, errors.Wrap(err, "trying to get new file for writing")
-	}
-	filepath := path + string(os.PathSeparator) + file
-	return data.OpenFileForWriting(filepath, true)
+	return nil, errors.New("GetNextFileForWriting needs a current file to start from")
 }
 
 func openNewFileForWriting(path string) (*os.File, error) {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -17,17 +16,25 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Global block, reused for writing.
-var block []byte
+var (
+	// Block, reused for writing.
+	block []byte
 
-// The size of the block used for writing.
-var blocksize int
+	// The size of the block used for writing.
+	blocksize int
+
+	// Path where to write the files.
+	filepathPrefix string
+
+	// Maximum size of a file to write into.
+	fileMaxsize int64
+)
 
 // Global state of the current file to write into.
 var out *os.File
 
 func main() {
-	// Preparing the graceful shutdown elements.
+	// Setting up the graceful shutdown elements.
 	stopCtx, cancelFn := context.WithCancel(context.Background())
 	stopWg := &sync.WaitGroup{}
 	stopWg.Add(2)
@@ -44,21 +51,23 @@ func main() {
 	}
 
 	block = directio.AlignedBlock(cfg.BlockSize)
-	blocksize = cfg.BlockSize
-	log.Printf("Using blocksize %d, writing files in path %s\n", cfg.BlockSize, cfg.Path)
+	blocksize = len(block)
+	filepathPrefix = cfg.Path
+	fileMaxsize = cfg.MaxFileSizeBytes
+	log.Printf("Using a %d bytes block, writing files in path %s\n", len(block), cfg.Path)
 
 	dataCh := make(chan data.SomeData, 1_000_000)
 	defer close(dataCh)
 
-	go writer(cfg.Path, cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
+	go writer(dataCh, stopCtx, stopWg)
 	go producer(dataCh, stopCtx, stopWg)
 
 	waitingForGracefulShutdown(cancelFn, stopWg)
 }
 
-func writer(filepathPrefix string, fileMaxsize int64, dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.WaitGroup) {
+func writer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.WaitGroup) {
 
-	f, err := internal.GetFileForWriting(nil, filepathPrefix, fileMaxsize)
+	f, err := internal.GetInitialFileForWriting(filepathPrefix, fileMaxsize)
 	if err != nil {
 		log.Fatalln("Failed to look for the next file to write into. Reason:", err)
 	}
@@ -82,7 +91,6 @@ func writer(filepathPrefix string, fileMaxsize int64, dataCh chan data.SomeData,
 						log.Println("Failed writing to file. Reason:", err)
 						break
 					}
-					log.Println("Wrote", d)
 				}
 			}
 			if out != nil { // Just for safety reasons.
@@ -120,9 +128,9 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 			break
 		default:
 			i++
-			d := data.SomeData{Value: internal.RandStringMinMax(1, 101)}
+			d := data.SomeData{Value: internal.RandStringMinMax(64, 601)}
 			dataCh <- d
-			log.Printf("Produced (%d chars) %+v\n", len(d.Value), d)
+			log.Printf("Produced (%d chars).\n", len(d.Value))
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -132,7 +140,51 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 
 func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 
-	f, err := internal.GetFileForWriting(out, filepathPrefix, fileMaxsize)
+	ed := d.Encode()
+	edl := len(ed)
+	edlb := data.I64toBytes(uint64(edl))
+	// Encoded data fits into one block.
+	if blocksize >= 8+edl {
+		copy(block, edlb)   // putting first the (bytes of the) encoded data length
+		copy(block[8:], ed) // putting the encoded data
+		if err := writeOut(block); err != nil {
+			return err
+		}
+		log.Println("[dbg]  edl:", edl, "  wrote:", 8+edl)
+		return nil
+	}
+	// Encoded data must be written in multiple blocks.
+	i := blocksize - 8
+	// Same as one block case, in the 1st block we write the size and then the first part.
+	copy(block, edlb) // putting first the (bytes of the) encoded data length
+	copy(block[8:], ed[:i])
+	if err := writeOut(block); err != nil {
+		return err
+	}
+	log.Println("[dbg]  edl:", edl, "  wrote:", 8+i, "  next i:", i)
+	// Next block(s).
+	for edl-i > 0 {
+		if edl > i+blocksize {
+			copy(block, ed[i:i+blocksize])
+			if err := writeOut(block); err != nil {
+				return err
+			}
+			log.Println("[dbg]  edl:", edl, "  wrote:", blocksize, "  next i:", i+blocksize)
+			i = i + blocksize
+		} else {
+			copy(block, ed[i:])
+			if err := writeOut(block); err != nil {
+				return err
+			}
+			log.Println("[dbg]  edl:", edl, "  wrote:", edl-i, "  next i:", edl)
+			i = edl
+		}
+	}
+	return nil
+}
+
+func writeOut(block []byte) error {
+	f, err := internal.CheckNextFileForWriting(out, filepathPrefix, fileMaxsize)
 	if err != nil {
 		return err
 	}
@@ -144,22 +196,9 @@ func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 		log.Println("Writing to new file", f.Name())
 		out = f
 	}
-	// err := d.Encode(block)
-	ed := d.Encode()
-	edl := (len(ed))
-	log.Println("[dbg] encoded data length:", edl)
-	if blocksize >= edl {
-		// Encoded data's length fits into the block.
-		copy(block, ed)
-		_, err = out.Write(block)
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("writing to file (the item %+v)", *d))
-		}
-		return nil
+	if _, err := out.Write(block); err != nil {
+		return errors.Wrap(err, "writing to file")
 	}
-	// Encoded data's length must be written using multiple blocks.
-	// TODO
-	log.Fatal("Unimplemented writing encoded data in multiple blocks")
 	return nil
 }
 

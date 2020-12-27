@@ -51,9 +51,8 @@ func main() {
 		log.Printf("Starting with an empty state")
 	}
 
-	fileMaxSize := cfg.MaxBlocks * int64(cfg.BlockSize)
-	go consumer(fileMaxSize, dataCh, stopCtx, stopWg)
-	go reader(cfg.Path, fileMaxSize, dataCh, stopCtx, stopWg)
+	go consumer(cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
+	go reader(cfg.Path, cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
 
 	waitingForGracefulShutdown(cancelFn, stopWg)
 }
