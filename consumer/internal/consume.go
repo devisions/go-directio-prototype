@@ -2,48 +2,40 @@ package internal
 
 import (
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
+	"strconv"
+	"strings"
 
 	"github.com/devisions/go-playground/go-directio/internal/data"
-	"github.com/pkg/errors"
 )
 
-type ConsumerData struct {
+type ReadData struct {
 	Data         *data.SomeData
 	FromFilepath string
+	ReadBytes    int64
 }
 
-// GetFileForReading looks for the next available file to be used for reading.
-// If `curr`ent (existing) file reached the max size, it looks for the next available one, if any.
-// If `curr`ent (existing) file did not reached the max size, nil is returned, meaning that it can be reused.
-func GetFileForReading(curr *os.File, path string, maxsize int64) (*os.File, error) {
-	// First, let's check the current file size, if provided.
-	if curr != nil {
-		fi, err := curr.Stat()
+// CheckFileForNextReading checks if the current or a next file should be used for reading.
+// If current file reached the max size, it looks for a newer file and returns it.
+// Otherwise, it returns nil, meaning that `curr` file can still be used for reading.
+func CheckFileForNextReading(curr *os.File, path string, readBytes int64, maxsize int64) (*os.File, error) {
+	if readBytes == maxsize {
+		fname, err := GetNextFileNameForReading(path, curr.Name())
 		if err != nil {
-			return nil, errors.Wrap(err, "trying to get the current file info")
+			return nil, err
 		}
-		if fi.Size() >= maxsize {
-			file, err := getNextFileNameForReading(path, curr.Name())
-			if err != nil {
-				return nil, errors.Wrap(err, "trying to get next file for reading")
-			}
-			filepath := path + string(os.PathSeparator) + file
-			return data.OpenFileForReading(filepath)
+		// Closing the `curr`ent file.
+		if err := curr.Close(); err != nil {
+			log.Printf("[WARN] Failed to close existing file '%s'. Reason:%s\n", curr.Name(), err)
 		}
-		return nil, nil // Existing is not returned again.
+		return data.OpenFileForReading(path + string(os.PathSeparator) + fname)
 	}
-	// Nothing was read before, (no `curr`ent exists).
-	file, err := getFirstFileNameForReading(path)
-	if err != nil {
-		return nil, errors.Wrap(err, "trying to get first file for reading")
-	}
-	filepath := path + string(os.PathSeparator) + file
-	return data.OpenFileForReading(filepath)
+	return nil, nil
 }
 
-func getFirstFileNameForReading(iopath string) (string, error) {
+func GetFirstFileNameForReading(iopath string) (string, error) {
 	fs, err := ioutil.ReadDir(iopath)
 	if err != nil {
 		return "", err
@@ -56,33 +48,33 @@ func getFirstFileNameForReading(iopath string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-func getNextFileNameForReading(iopath string, lastFilePath string) (string, error) {
+func GetNextFileNameForReading(iopath string, lastFilePath string) (string, error) {
 	fs, err := ioutil.ReadDir(iopath)
 	if err != nil {
 		return "", err
 	}
-	var fi, f1 os.FileInfo
-	var lastFilePathFound bool
+	intLastFilename, err := getIntOfFilenameWithoutExt(lastFilePath)
+	if err != nil {
+		return "", err
+	}
+	//log.Println("[dbg] getNextFileNameForReading intLastFilename:", intLastFilename)
 	for _, f := range fs {
 		fname := f.Name()
 		if ".dat" == path.Ext(fname) {
-			if f1 == nil {
-				f1 = f
-			}
-			if fname == lastFilePath {
-				lastFilePathFound = true
+			intCurrFilename, err := getIntOfFilenameWithoutExt(fname)
+			if err != nil {
+				// ignoring it, it doesn't follow the pattern {UTC}.dat (ex: 1609074647.dat)
 				continue
 			}
-			if lastFilePathFound {
-				return fi.Name(), nil
+			if intCurrFilename > intLastFilename {
+				return f.Name(), nil
 			}
-			fi = f
 		}
 	}
-	if lastFilePathFound /* lastFilePath was found, but there was no next to return immediately. */ ||
-		f1 == nil /* Or lastFilePath was not found, but there is no first (any) file. */ {
-		return "", os.ErrNotExist
-	}
-	// Returning the 1st file found.
-	return f1.Name(), nil
+	return "", os.ErrNotExist
+}
+
+func getIntOfFilenameWithoutExt(filepath string) (int, error) {
+	filenameNoExt := strings.TrimSuffix(path.Base(filepath), ".dat")
+	return strconv.Atoi(filenameNoExt)
 }

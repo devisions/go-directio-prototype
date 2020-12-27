@@ -15,10 +15,10 @@ import (
 const STATE_FILE = "consumer.state"
 
 type ConsumerState struct {
-	ReadFilepath  string
-	ReadBlocks    int
-	saveFilepath  string
-	saveBlocksize int
+	ReadFilepath       string
+	ReadBytes          int64
+	saveStateFilepath  string
+	saveStateBlocksize int
 }
 
 func (s *ConsumerState) encode(to []byte) error {
@@ -42,19 +42,19 @@ func decode(from []byte) (*ConsumerState, error) {
 }
 
 func (s *ConsumerState) SaveToFile() error {
-	f, err := data.OpenFileForWriting(s.saveFilepath, false)
+	f, err := data.OpenFileForWriting(s.saveStateFilepath, false)
 	if err != nil {
 		return errors.Wrap(err, "opening file for writing the state")
 	}
 	defer func() { _ = f.Close() }()
-	block := directio.AlignedBlock(s.saveBlocksize)
+	block := directio.AlignedBlock(s.saveStateBlocksize)
 	err = s.encode(block)
 	if err != nil {
 		return errors.Wrap(err, "encoding state")
 	}
 	_, err = f.Write(block)
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("writing the state to file %s", s.saveFilepath))
+		return errors.Wrap(err, fmt.Sprintf("writing the state to file %s", s.saveStateFilepath))
 	}
 	return nil
 }
@@ -67,8 +67,8 @@ func InitConsumerState(path string, saveBlocksize int) (*ConsumerState, error) {
 			// There is no `consumer.state` file. We'll return an empty object.
 			// The file will eventually be created first time the state is saved.
 			return &ConsumerState{
-				saveFilepath:  filepath,
-				saveBlocksize: saveBlocksize,
+				saveStateFilepath:  filepath,
+				saveStateBlocksize: saveBlocksize,
 			}, nil
 		}
 		return nil, err
@@ -82,22 +82,21 @@ func InitConsumerState(path string, saveBlocksize int) (*ConsumerState, error) {
 	if derr != nil {
 		return nil, derr
 	}
-	s.saveFilepath = filepath
-	s.saveBlocksize = saveBlocksize
+	// Being private, these are not encoded. So let's add them.
+	s.saveStateFilepath = filepath
+	s.saveStateBlocksize = saveBlocksize
 	return s, nil
 }
 
-func (s *ConsumerState) UseNew(filepath string) {
-	if filepath != "" && s.ReadFilepath != filepath {
-		s.ReadFilepath = filepath
-		s.ReadBlocks = 1
-	}
+func (s *ConsumerState) UseNew(filepath string, ReadBytes int64) {
+	s.ReadFilepath = filepath
+	s.ReadBytes = ReadBytes
 }
 
 func (s *ConsumerState) IsEmpty() bool {
-	return s.ReadFilepath == "" && s.ReadBlocks == 0
+	return s.ReadFilepath == ""
 }
 
 func (s *ConsumerState) SeekOffset() int64 {
-	return int64(s.ReadBlocks) * int64(s.saveBlocksize)
+	return s.ReadBytes
 }

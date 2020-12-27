@@ -17,16 +17,34 @@ import (
 	"github.com/pkg/errors"
 )
 
-var block []byte
+var (
+	// Global var: Block (re)used for reading.
+	gBlock []byte
 
-// Global state of the current file to read from.
-var in *os.File
+	// Global var: Size of the `block`.
+	gBlocksize int
 
-// Global state of the consumer.
-var state *internal.ConsumerState
+	// Global var: Path where the files to read from exist.
+	gFilepathPrefix string
+
+	// Global var: Maximum size of a file.
+	gFileMaxsize int64
+
+	// Global var: Read bytes from the current file.
+	gReadBytes int64
+
+	// Global var: The current file to read from.
+	gIn *os.File
+
+	// Global var: State of the consumer.
+	gState *internal.ConsumerState
+)
+
+// Maximum value of encoded data length (65KB).
+const MAX_EDL = 65 * 1024
 
 func main() {
-	// Preparing the graceful shutdown elements.
+	// Setting up the graceful shutdown elements.
 	stopCtx, cancelFn := context.WithCancel(context.Background())
 	stopWg := &sync.WaitGroup{}
 	stopWg.Add(2)
@@ -35,113 +53,219 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load config", err)
 	}
-	log.Printf("Using blocksize %d and reading files in path %s\n", cfg.BlockSize, cfg.Path)
-	// directio.AlignSize = cfg.BlockSize
-	block = directio.AlignedBlock(cfg.BlockSize)
 
-	dataCh := make(chan *internal.ConsumerData, 1_000_000)
+	gBlock = directio.AlignedBlock(cfg.BlockSize)
+	gBlocksize = len(gBlock)
+	gFilepathPrefix = cfg.Path
+	gFileMaxsize = cfg.MaxFileSizeBytes
+	log.Printf("Using a %d bytes block, reading files from path %s\n", gBlocksize, cfg.Path)
 
-	state, err = internal.InitConsumerState(cfg.Path, cfg.BlockSize)
+	dataCh := make(chan *internal.ReadData, 1_000_000)
+
+	gState, err = internal.InitConsumerState(cfg.Path, cfg.BlockSize)
 	if err != nil {
 		log.Fatalln("Failed to init state. Reason:", err)
 	}
-	if !state.IsEmpty() {
-		log.Printf("Starting with state: ReadFilepath:%s Readblocks:%d \n", state.ReadFilepath, state.ReadBlocks)
+	if !gState.IsEmpty() {
+		log.Printf("Starting with state { ReadFilepath: %s ReadBytes: %d }\n", gState.ReadFilepath, gState.ReadBytes)
 	} else {
-		log.Printf("Starting with an empty state")
+		log.Printf("Starting with an empty state.")
 	}
 
-	go consumer(cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
-	go reader(cfg.Path, cfg.MaxFileSizeBytes, dataCh, stopCtx, stopWg)
+	go consumer(dataCh, stopCtx, stopWg)
+	go reader(dataCh, stopCtx, stopWg)
 
 	waitingForGracefulShutdown(cancelFn, stopWg)
 }
 
-func reader(filepathPrefix string, fileMaxsize int64, dataCh chan *internal.ConsumerData, stopCtx context.Context, stopWg *sync.WaitGroup) {
+func reader(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *sync.WaitGroup) {
 
 	var f *os.File
 	var err error
-	if !state.IsEmpty() {
-		f, err = data.OpenFileForReading(state.ReadFilepath)
-		if err != nil {
-			if os.IsNotExist(errors.Cause(err)) {
-				log.Println("Last read file is missing. Let's look for any first file to read...")
+	showInitialWarn := true
+	initing := true
+	for initing {
+		select {
+		case <-stopCtx.Done():
+			log.Println("Reader has stopped.")
+			stopWg.Done()
+			return
+		default:
+			if !gState.IsEmpty() {
+				f, err = data.OpenFileForReading(gState.ReadFilepath)
+				if err != nil {
+					if os.IsNotExist(errors.Cause(err)) {
+						fname, err := internal.GetNextFileNameForReading(gFilepathPrefix, gState.ReadFilepath)
+						if err == os.ErrNotExist {
+							if showInitialWarn {
+								log.Println("[WARN] Last read file is missing. Didn't found a next file yet...")
+								showInitialWarn = false
+							}
+						} else {
+							fp := gFilepathPrefix + string(os.PathSeparator) + fname
+							f, err = data.OpenFileForReading(fp)
+							if err != nil {
+								log.Fatalf("Could not use the next file found '%s'. Reason: %s\n", fp, err)
+							}
+							log.Println("[WARN] Last read file is missing. Found as next file", fp)
+							gState.ReadBytes = 0 // resetting for consistency
+						}
+					} else {
+						log.Fatalln("Failed to open last read file (according to the state). Reason:", err)
+					}
+				}
 			} else {
-				log.Fatalln("Failed to open last read file (according to the state). Reason:", err)
+				// There is no last state, so let's start with the first file that might exist.
+				fname, err := internal.GetFirstFileNameForReading(gFilepathPrefix)
+				if err != nil && err != os.ErrNotExist {
+					log.Fatal("Failed trying to use the first file. Reason:", err)
+				}
+				fp := gFilepathPrefix + string(os.PathSeparator) + fname
+				f, err = data.OpenFileForReading(fp)
+				if err != nil {
+					log.Fatalf("Could not use the first file found '%s'. Reason: %s\n", fp, err)
+				}
 			}
+			if f == nil {
+				// No file exists, either (one of these):
+				// - the last read, according to the state
+				// - the next one, if last read file is missing
+				// - first one, if there is no previous state
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			initing = false
 		}
 	}
-	for f == nil {
-		f, err = internal.GetFileForReading(nil, filepathPrefix, fileMaxsize)
-		if err != nil {
-			if !os.IsNotExist(errors.Cause(err)) {
-				log.Fatalln("Failed to get a file to read. Reason:", err)
-			}
-			// No file exists. Let's wait for anything new.
-			time.Sleep(1 * time.Second)
-			continue
-		}
-	}
-	if state.ReadBlocks > 0 {
-		if _, err := f.Seek(state.SeekOffset(), 0); err != nil {
+
+	if gState.ReadBytes > 0 {
+		if _, err := f.Seek(gState.SeekOffset(), 0); err != nil {
 			log.Fatalln("Failed to skip already read blocks. Reason", err)
 		}
-		log.Println("Reading from file", f.Name(), "and skipping", state.ReadBlocks, "blocks")
+		gReadBytes = gState.ReadBytes
+		log.Println("Reading from file", f.Name(), "and skipping", gState.ReadBytes, "bytes")
 	} else {
 		log.Println("Reading from file", f.Name())
 	}
-	in = f
+	gIn = f
 
 	running := true
 	for running {
 		select {
 		case <-stopCtx.Done():
 			log.Println("Stopping the reader ...")
-			err := in.Close()
+			err := gIn.Close()
 			if err != nil {
 				log.Printf("Failed to close the file. Reason: %s", err)
 			}
 			running = false
 			break
 		default:
-			f, err := internal.GetFileForReading(in, filepathPrefix, fileMaxsize)
+			d, err := readIn()
 			if err != nil {
-				if !os.IsNotExist(errors.Cause(err)) {
-					log.Fatalln("Failed to get a file to read. Reason:", err)
+				if err == os.ErrNotExist || err == io.EOF {
+					// There is no new file to read from OR
+					// nothing else to read on existing file. Let's wait ...
+					time.Sleep(1 * time.Second)
+					continue
 				}
-				// There is no file to read from. Let's wait ...
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			// New file for reading provided, let's close the existing and start using it.
-			if f != nil && f.Name() != in.Name() {
-				if err := in.Close(); err != nil {
-					log.Printf("[WARN] Failed to close existing file '%s'. Reason:%s\n", in.Name(), err)
-				}
-				log.Println("Reading from new file", f.Name())
-				in = f
-			}
-
-			_, err = in.Read(block)
-			if err != nil && err != io.EOF {
 				log.Fatalln("Failed to read from file. Reason:", err)
 			}
-			if err == io.EOF {
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			d, err := data.Decode(block)
-			if err != nil {
-				log.Fatalln("Failed to decode data", err)
-			}
-			dataCh <- &internal.ConsumerData{Data: d, FromFilepath: in.Name()}
+			dataCh <- d
 		}
 	}
 	log.Println("Reader has stopped.")
 	stopWg.Done()
 }
 
-func consumer(fileMaxsize int64, dataCh chan *internal.ConsumerData, stopCtx context.Context, stopWg *sync.WaitGroup) {
+func readIn() (*internal.ReadData, error) {
+
+	f, err := internal.CheckFileForNextReading(gIn, gFilepathPrefix, gReadBytes, gFileMaxsize)
+	if err != nil {
+		return nil, err
+	}
+	if f != nil {
+		log.Println("Reading from new file", f.Name())
+		gIn = f
+		gReadBytes = 0
+	}
+
+	_, err = gIn.Read(gBlock)
+	if err != nil {
+		if err != io.EOF {
+			log.Fatalln("Failed to read from file. Reason:", err)
+		}
+		return nil, io.EOF
+	}
+	gReadBytes += int64(gBlocksize)
+
+	// First, let's get the encoded data length (edl) from the beginning of this 1st block.
+	edl := int(data.BytesToI64(gBlock[:8]))
+	if edl > MAX_EDL {
+		log.Printf("[WARN] Cannot read from file '%s' since it contains data from a previous file. Skipping it...\n", gIn.Name())
+		// Forcing to skip the current file and get the next one.
+		gReadBytes = gFileMaxsize
+		return nil, io.EOF
+	}
+
+	// Encoded data fits into one block.
+	if gBlocksize >= 8+int(edl) {
+		d, err := data.Decode(gBlock[8:])
+		if err != nil {
+			log.Fatalln("Failed to decode data", err)
+		}
+		log.Printf("[dbg]  edl: %d  read: %d  done.\n", edl, gBlocksize)
+		return &internal.ReadData{
+			Data:         d,
+			FromFilepath: gIn.Name(),
+			ReadBytes:    gReadBytes,
+		}, nil
+	}
+
+	// Encoded data was written in multiple blocks.
+	i := gBlocksize - 8
+	ed := make([]byte, edl) // encoded data (ed) bytes
+	copy(ed, gBlock[8:])
+	for edl-i > 0 {
+		f, err := internal.CheckFileForNextReading(gIn, gFilepathPrefix, gReadBytes, gFileMaxsize)
+		if err != nil {
+			return nil, err
+		}
+		if f != nil {
+			log.Println("Reading from new file", f.Name())
+			gIn = f
+			gReadBytes = 0
+		}
+		// Read the next block of encoded data.
+		_, err = gIn.Read(gBlock)
+		if err != nil {
+			log.Fatalln("Failed to read from file (next block of existing data). Reason:", err)
+		}
+		gReadBytes += int64(gBlocksize)
+
+		if edl > i+gBlocksize {
+			copy(ed[i:i+gBlocksize], gBlock)
+			log.Printf("[dbg]  edl: %d  read: %d  next i: %d\n", edl, gBlocksize, i+gBlocksize)
+			i = i + gBlocksize
+		} else {
+			copy(ed[i:], gBlock)
+			log.Printf("[dbg]  edl: %d  read: %d  done.\n", edl, edl-i)
+			i = edl
+		}
+	}
+	// Finally, read all blocks of encoded data bytes. Let's decode it.
+	d, err := data.Decode(ed)
+	if err != nil {
+		log.Fatalln("Failed to decode data", err)
+	}
+	return &internal.ReadData{
+		Data:         d,
+		FromFilepath: gIn.Name(),
+		ReadBytes:    gReadBytes,
+	}, nil
+}
+
+func consumer(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *sync.WaitGroup) {
 	running := true
 	for running {
 		select {
@@ -152,14 +276,14 @@ func consumer(fileMaxsize int64, dataCh chan *internal.ConsumerData, stopCtx con
 			break
 
 		case cd := <-dataCh:
-			log.Printf("Consumed %+v\n", *cd.Data)
-			tryDelete(state.ReadFilepath, fileMaxsize)
-			if cd.FromFilepath != state.ReadFilepath {
-				state.UseNew(cd.FromFilepath)
+			log.Printf("Consumed (%d chars)\n", len(cd.Data.Value))
+			tryDelete(gState.ReadFilepath, gFileMaxsize)
+			if cd.FromFilepath != gState.ReadFilepath {
+				gState.UseNew(cd.FromFilepath, cd.ReadBytes)
 			} else {
-				state.ReadBlocks += 1
+				gState.ReadBytes = cd.ReadBytes
 			}
-			err := state.SaveToFile()
+			err := gState.SaveToFile()
 			if err != nil {
 				log.Fatalln("Failed to save state to file. Reason:", err)
 			}
@@ -178,7 +302,7 @@ func tryDelete(filepath string, maxSize int64) bool {
 		log.Println("[WARN] Failed while trying to check and delete the consumed file", filepath, "Reason:", err)
 	}
 	if deleted {
-		log.Println("Deleted the consumed file", state.ReadFilepath)
+		// log.Println("Deleted the consumed file", gState.ReadFilepath)
 		return true
 	}
 	return false
