@@ -111,7 +111,7 @@ func reader(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *syn
 							if err != nil {
 								log.Fatalf("Could not use the next file found '%s'. Reason: %s\n", fp, err)
 							}
-							log.Println("[WARN] Last read file is missing. Found as next file", fp)
+							log.Println("Found the next file", fp)
 							gState.ReadBytes = 0 // resetting for consistency
 						}
 					} else {
