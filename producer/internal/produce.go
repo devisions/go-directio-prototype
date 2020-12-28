@@ -54,7 +54,7 @@ func CheckNextFileForWriting(curr *os.File, path string, maxsize int64) (*os.Fil
 }
 
 func openNewFileForWriting(path string) (*os.File, error) {
-	filepath := fmt.Sprintf("%s%s%d.dat", path, string(os.PathSeparator), time.Now().UTC().Unix())
+	filepath := fmt.Sprintf("%s%s%d.dat", path, string(os.PathSeparator), time.Now().UTC().UnixNano())
 	return data.OpenFileForWriting(filepath, false)
 }
 
