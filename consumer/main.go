@@ -97,9 +97,13 @@ func reader(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *syn
 					if os.IsNotExist(errors.Cause(err)) {
 						fname, err := internal.GetNextFileNameForReading(gFilepathPrefix, gState.ReadFilepath)
 						if err == os.ErrNotExist {
-							if showInitialWarn {
-								log.Println("[WARN] Last read file is missing. Didn't found a next file yet...")
+							if gState.ReadBytes < gFileMaxsize && showInitialWarn {
+								log.Println("[WARN] Last (not completely) read file is missing. Didn't found a next file yet ...")
 								showInitialWarn = false
+							} else if showInitialWarn {
+								log.Println("Didn't found a next file yet ...")
+								showInitialWarn = false
+
 							}
 						} else {
 							fp := gFilepathPrefix + string(os.PathSeparator) + fname
@@ -117,13 +121,21 @@ func reader(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *syn
 			} else {
 				// There is no last state, so let's start with the first file that might exist.
 				fname, err := internal.GetFirstFileNameForReading(gFilepathPrefix)
-				if err != nil && err != os.ErrNotExist {
-					log.Fatal("Failed trying to use the first file. Reason:", err)
-				}
-				fp := gFilepathPrefix + string(os.PathSeparator) + fname
-				f, err = data.OpenFileForReading(fp)
 				if err != nil {
-					log.Fatalf("Could not use the first file found '%s'. Reason: %s\n", fp, err)
+					if err != os.ErrNotExist {
+						log.Fatal("Failed trying to use the first file. Reason:", err)
+					}
+					if showInitialWarn {
+						log.Println("Didn't found a next file yet ...")
+						showInitialWarn = false
+					}
+				} else {
+					log.Println("initing > GetFirstFileNameForReading => fname:", fname, " err:", err)
+					fp := gFilepathPrefix + string(os.PathSeparator) + fname
+					f, err = data.OpenFileForReading(fp)
+					if err != nil {
+						log.Fatalf("Could not use the first file found '%s'. Reason: %s\n", fp, err)
+					}
 				}
 			}
 			if f == nil {
