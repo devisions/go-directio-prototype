@@ -28,12 +28,16 @@ Consumer:
     - That can happens when the file system where the file resides does not support O_DIRECT flag.<br/>
       See these [notes on linux kernel and O_DIRECT](https://lists.archive.carbon60.com/linux/kernel/720702).
 
+- [ ] Replace the remaining usages of `ioutil.ReadDir` with this better option<br/>
+      (basically, use `fnames, err = f.Readdirnames(0)` then do `sort.Strings(fnames)`)
+
 ## Tests
 
 
 ### Reading Directory
 
-Since I discovered that `ioutil.ReadDir` takes aprox 1.2 sec when there are +100K files in the directory, switched to using `os.File.Readdirnames`.
+Since I discovered that `ioutil.ReadDir` takes aprox 1.2 sec when there are +100K files in the directory, switched to using `os.File.Readdirnames`. Initially, raised [this issue](https://github.com/golang/go/issues/43435) on Go's GitHub issue tracker.
+
 But that call is not listing the files in the order they were created or by file name. So the result must be sorted. But the overall exec time is considerably better than of `ioutil.ReadDir`'s one.
 
 `read_dir_eval/readdir_eval.go` is a relevant example. Running it in a directory containing 499099 files, here are the figures (output):
