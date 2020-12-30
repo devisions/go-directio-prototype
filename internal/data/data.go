@@ -9,7 +9,8 @@ import (
 )
 
 type SomeData struct {
-	Value string
+	Text   string
+	Number uint64
 }
 
 func (d *SomeData) Encode() []byte {

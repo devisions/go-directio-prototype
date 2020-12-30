@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -128,7 +129,10 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 			break
 		default:
 			i++
-			d := data.SomeData{Value: internal.RandStringMinMax(64, 601)}
+			d := data.SomeData{
+				Text:   internal.RandStringMinMax(64, 601),
+				Number: rand.Uint64(),
+			}
 			dataCh <- d
 			// log.Printf("Produced (%d chars).\n", len(d.Value))
 			time.Sleep(500 * time.Millisecond)
@@ -149,7 +153,7 @@ func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 		if err := writeOut(block); err != nil {
 			return err
 		}
-		log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  \n", len(d.Value), edl, 8+edl)
+		log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  \n", len(d.Text), edl, 8+edl)
 		return nil
 	}
 	// Encoded data must be written in multiple blocks.
@@ -160,7 +164,7 @@ func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 	if err := writeOut(block); err != nil {
 		return err
 	}
-	log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  next i: %d\n", len(d.Value), edl, 8+i, i)
+	log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  next i: %d\n", len(d.Text), edl, 8+i, i)
 	// Next block(s).
 	for edl-i > 0 {
 		if edl > i+blocksize {
@@ -168,14 +172,14 @@ func write(filepathPrefix string, fileMaxsize int64, d *data.SomeData) error {
 			if err := writeOut(block); err != nil {
 				return err
 			}
-			log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  next i: %d\n", len(d.Value), edl, 8+i, i+blocksize)
+			log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  next i: %d\n", len(d.Text), edl, 8+i, i+blocksize)
 			i = i + blocksize
 		} else {
 			copy(block, ed[i:])
 			if err := writeOut(block); err != nil {
 				return err
 			}
-			log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  done.\n", len(d.Value), edl, edl-i)
+			log.Printf("[dbg]  chars: %d  edl: %d  wrote: %d  done.\n", len(d.Text), edl, edl-i)
 			i = edl
 		}
 	}

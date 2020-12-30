@@ -181,7 +181,11 @@ func reader(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *syn
 					time.Sleep(1 * time.Second)
 					continue
 				}
-				log.Fatalln("Failed to read from file. Reason:", err)
+				if err != io.EOF {
+					log.Fatalln("Failed to read from file. Reason:", err)
+				}
+				// Since we didn't get ErrNoExist it means that there are still some files to consume.
+				continue
 			}
 			dataCh <- d
 		}
@@ -288,7 +292,7 @@ func consumer(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *s
 			break
 
 		case cd := <-dataCh:
-			log.Printf("Consumed (%d chars)\n", len(cd.Data.Value))
+			log.Printf("Consumed Text: %d chars, Number: %d\n", len(cd.Data.Text), cd.Data.Number)
 			tryDelete(gState.ReadFilepath, gFileMaxsize)
 			if cd.FromFilepath != gState.ReadFilepath {
 				gState.UseNew(cd.FromFilepath, cd.ReadBytes)
