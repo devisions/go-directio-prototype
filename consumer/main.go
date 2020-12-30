@@ -304,8 +304,8 @@ func consumer(dataCh chan *internal.ReadData, stopCtx context.Context, stopWg *s
 				log.Fatalln("Failed to save state to file. Reason:", err)
 			}
 
-		default:
-			time.Sleep(1 * time.Second)
+			// default:
+			// time.Sleep(1 * time.Second)
 		}
 	}
 	log.Println("Consumer has stopped.")

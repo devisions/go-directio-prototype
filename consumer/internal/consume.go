@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -49,25 +50,32 @@ func GetFirstFileNameForReading(iopath string) (string, error) {
 }
 
 func GetNextFileNameForReading(iopath string, lastFilePath string) (string, error) {
-	fs, err := ioutil.ReadDir(iopath)
+	// fis, err := ioutil.ReadDir(iopath)
+	f, err := os.Open(iopath)
+	defer func() { _ = f.Close() }()
 	if err != nil {
 		return "", err
 	}
+	fnames, err := f.Readdirnames(0)
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(fnames)
 	intLastFilename, err := getIntOfFilenameWithoutExt(lastFilePath)
 	if err != nil {
 		return "", err
 	}
-	//log.Println("[dbg] getNextFileNameForReading intLastFilename:", intLastFilename)
-	for _, f := range fs {
-		fname := f.Name()
-		if ".dat" == path.Ext(fname) {
-			intCurrFilename, err := getIntOfFilenameWithoutExt(fname)
+	// log.Printf("[dbg] Readdirnames => %v\n", fnames)
+	// log.Println("[dbg] getNextFileNameForReading intLastFilename:", intLastFilename)
+	for _, fn := range fnames {
+		if ".dat" == path.Ext(fn) {
+			intCurrFilename, err := getIntOfFilenameWithoutExt(fn)
 			if err != nil {
 				// ignoring it, it doesn't follow the pattern {UTC}.dat (ex: 1609074647.dat)
 				continue
 			}
 			if intCurrFilename > intLastFilename {
-				return f.Name(), nil
+				return fn, nil
 			}
 		}
 	}

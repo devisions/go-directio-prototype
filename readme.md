@@ -24,27 +24,26 @@ Consumer:
 
 ## Todos
 
-- If writer fails to init properly, main should get notified, stop the producer, and end itself.
+- [ ] If writer fails to init properly, main should get notified, stop the producer, and end itself.
     - That can happens when the file system where the file resides does not support O_DIRECT flag.<br/>
       See these [notes on linux kernel and O_DIRECT](https://lists.archive.carbon60.com/linux/kernel/720702).
-- Clarify the dangling references to deleted files.<br/>
-  Example:
-  ```shell
-  $ lsof -u devisions | grep /tmp/test-directio
-  zsh        698818 devisions  cwd       DIR              253,0      4096   10224653 /tmp/test-directio
-  main      1489456 devisions    3r      REG              253,0      2048   10225045 /tmp/test-directio/1608635379.dat (deleted)
-  main      1489456 devisions    7r      REG              253,0      2048   10225045 /tmp/test-directio/1608635379.dat (deleted)
-  main      1489456 devisions    8r      REG              253,0      2048   10224644 /tmp/test-directio/1608635383.dat (deleted)
-  main      1489456 devisions    9r      REG              253,0      2048   10224507 /tmp/test-directio/1608635381.dat (deleted)
-  main      1489456 devisions   10r      REG              253,0      2048   10224507 /tmp/test-directio/1608635381.dat (deleted)
-  main      1489456 devisions   11r      REG              253,0      2048   10224985 /tmp/test-directio/1608635385.dat (deleted)
-  main      1489456 devisions   12r      REG              253,0      2048   10224644 /tmp/test-directio/1608635383.dat (deleted)
-  main      1489456 devisions   13r      REG              253,0      2048   10224986 /tmp/test-directio/1608635387.dat (deleted)
-  main      1489456 devisions   14r      REG              253,0      2048   10224985 /tmp/test-directio/1608635385.dat (deleted)
-  main      1489456 devisions   15r      REG              253,0      2048   10224988 /tmp/test-directio/1608635389.dat (deleted)
-  main      1489456 devisions   16r      REG              253,0      2048   10224986 /tmp/test-directio/1608635387.dat (deleted)
-  main      1489456 devisions   17r      REG              253,0      2048   10224989 /tmp/test-directio/1608635391.dat (deleted)
-  main      1489456 devisions   18r      REG              253,0      2048   10224988 /tmp/test-directio/1608635389.dat (deleted)
-  main      1489456 devisions   19r      REG              253,0      2048   10224990 /tmp/test-directio/1608635393.dat (deleted)
-  ...
-  ```
+
+## Tests
+
+
+### Reading Directory
+
+Since I discovered that `ioutil.ReadDir` takes aprox 1.2 sec when there are +100K files in the directory, switched to using `os.File.Readdirnames`.
+But that call is not listing the files in the order they were created or by file name. So the result must be sorted. But the overall exec time is considerably better than of `ioutil.ReadDir`'s one.
+
+`read_dir_eval/readdir_eval.go` is a relevant example. Running it in a directory containing 499099 files, here are the figures (output):
+```
+>>> ioutil.ReadDir exec time: 1.311758808s
+>>> os.File.Readdirnames exec time: 144.131977ms
+>>> os.File.Readdirnames result has 499099 entries.
+>>> sort exec time: 163.322515ms
+```
+
+
+For such a huge number of files, the standard `rm -f *.dat` does not work and the option is to use `find . -name "*.dat" -print0 | xargs -0 rm`.
+

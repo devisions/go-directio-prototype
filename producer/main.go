@@ -135,7 +135,7 @@ func producer(dataCh chan data.SomeData, stopCtx context.Context, stopWg *sync.W
 			}
 			dataCh <- d
 			// log.Printf("Produced (%d chars).\n", len(d.Value))
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	log.Println("Producer stopped.")
